@@ -1,6 +1,7 @@
+import { pool } from '../data/db.js';                
 import { runChatReply } from './ai.service.js';
 import { normalizeProfile, validateProfile, mapGoalToCategories, deriveSafetySpec } from './profile.service.js';
-import { getRecentUsedNames, saveChosenExercises } from '../repos/history.repo.js';
+
 import { saveRoutine } from '../repos/routines.repo.js';
 
 function compactList(rows, max = 18) {
@@ -17,6 +18,40 @@ function extractJsonBlock(text = '') {
   return null;
 }
 
+function collectExerciseNames(plan) {
+  if (!plan?.weeks?.length) return [];
+  const names = [];
+  for (const w of plan.weeks)
+    for (const d of (w.days || w.sessions || []))
+      for (const e of (d.exercises || []))
+        if (e?.name) names.push(e.name);
+  return [...new Set(names)];
+}
+
+async function fetchImagesMapByNames(names = []) {
+  if (!names.length) return new Map();
+  const ph = names.map(() => '?').join(',');
+  const [rows] = await pool.query(
+    `SELECT name, image_url FROM exercises WHERE name IN (${ph})`,
+    names
+  );
+  return new Map(rows.map(r => [r.name, r.image_url || null]));
+}
+
+async function enrichPlanWithImages(planJson) {
+  const names = collectExerciseNames(planJson);
+  if (!names.length) return planJson;
+  const imgMap = await fetchImagesMapByNames(names);
+
+  for (const w of planJson.weeks)
+    for (const d of (w.days || w.sessions || []))
+      for (const e of (d.exercises || []))
+        if (e?.name && e.image_url == null)
+          e.image_url = imgMap.get(e.name) ?? null;
+
+  return planJson;
+}
+
 export async function generateMonthlyPlan({ userId, lastPlanDate, profile, history, pinnedFacts, system_prompt }) {
   const prof = normalizeProfile(profile);
   const errs = validateProfile(prof);
@@ -24,7 +59,7 @@ export async function generateMonthlyPlan({ userId, lastPlanDate, profile, histo
 
   const categories = mapGoalToCategories(prof.goal);
   const spec = deriveSafetySpec(prof);
-  const excludeNames = await getRecentUsedNames(userId, 7);
+
 
   const { fetchCatalog } = await import('./catalog.service.js');
   const catalogs = {};
@@ -92,10 +127,18 @@ Salida (dos partes):
     const jsonText = extractJsonBlock(raw);
     if (jsonText) {
       parsedPlan = JSON.parse(jsonText);
+
+      if (prof?.frequency && !parsedPlan.frequency) {
+        parsedPlan.frequency = prof.frequency;
+      }
+
+      parsedPlan = await enrichPlanWithImages(parsedPlan);
+
       if (parsedPlan?.weeks?.length) {
         const daysOrSessions = (w) => (w.days || w.sessions || []);
-        chosen = parsedPlan.weeks.flatMap(w => daysOrSessions(w).flatMap(d => (d.exercises || []).map(e => e.name))).filter(Boolean);
-        if (chosen.length) await saveChosenExercises(userId, [...new Set(chosen)]);
+        chosen = parsedPlan.weeks.flatMap(w =>
+          daysOrSessions(w).flatMap(d => (d.exercises || []).map(e => e.name))
+        ).filter(Boolean);
 
         await saveRoutine(userId, parsedPlan);
       }

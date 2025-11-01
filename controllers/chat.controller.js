@@ -14,9 +14,7 @@ import {
   getLatestRoutine,
   pickPlanDay
 } from '../repos/routines.repo.js';
-import {
-  getRecentSummaries 
-} from '../repos/summaries.repo.js';
+import { getRecentSummaries } from '../repos/summaries.repo.js';
 
 const system_prompt =
   "Eres FitSense, un coach de fitness profesional. Solo debes responder preguntas de tu área. " +
@@ -26,6 +24,12 @@ const system_prompt =
   "NO menciones la regla de 30 días salvo que el usuario pida plan/cambio. " +
   "Responde como coach: saluda solo en el primer turno de la sesión; luego continúa con naturalidad, sin presentarte. " +
   "Ofrece 1–2 consejos concretos. No inventes ni infieras datos personales.";
+
+function addDaysISO(iso, days) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 export async function startSession(req, res) {
   const { userId, sessionId } = req.body || {};
@@ -37,7 +41,7 @@ export async function startSession(req, res) {
   const sid = sessionId || `s-${userId}`;
   if (!sessions.has(sid)) {
     const seed = [];
-    const recents = await getRecentSummaries(userId, 2);
+    const recents = await getRecentSummaries(userId, 2); // últimos 2
     if (recents.length) {
       const joined = recents
         .map(r => `(${new Date(r.created_at).toISOString().slice(0, 10)}) ${r.summary}`)
@@ -93,14 +97,15 @@ export async function sendMessage(req, res) {
     if (!userRow) return res.status(404).json({ error: 'user_not_found' });
     const profile = mapUserRowToProfile(userRow);
 
-    const lastPlanDate = await getLastRoutineDate(userId);
+ 
+    const lastPlanDate = await getLastRoutineDate(userId); 
+    const lastISO = lastPlanDate ? lastPlanDate.toISOString() : null;
 
     pushTurn(sid, 'user', message);
-
     const history = sessions.get(sid) || [];
 
-    const days = daysBetween(lastPlanDate ? lastPlanDate.toISOString() : null);
-    const canChange = days >= 30;
+    const days = daysBetween(lastISO);
+    const canChange = days >= 30 || !lastPlanDate; 
     const wants = wantsPlan(message, forcePlan);
 
     const recents = await getRecentSummaries(userId, 2);
@@ -154,7 +159,7 @@ Perfil (desde BD):
             reply,
             canChange,
             generatedPlan: false,
-            daysSinceLastPlan: days
+            daysSinceLastPlan: Number.isFinite(days) ? days : null
           });
         }
       }
@@ -165,11 +170,28 @@ Perfil (desde BD):
         reply: fallback,
         canChange,
         generatedPlan: false,
-        daysSinceLastPlan: days
+        daysSinceLastPlan: Number.isFinite(days) ? days : null
       });
     }
 
-    if (!wants || !canChange) {
+    if (wants && lastISO && days < 30) {
+      const nextAllowedAt = addDaysISO(lastISO, 30);
+      const reply =
+        `Aún no corresponde actualizar tu rutina. ` +
+        `Puedes volver a pedir una nueva a partir del ${nextAllowedAt}. ` +
+        `Mientras tanto, ¿quieres que te recuerde qué toca hoy o prefieres tips para progresar con la actual?`;
+      pushTurn(sid, 'assistant', reply);
+      return res.json({
+        reply,
+        canChange: false,
+        generatedPlan: false,
+        daysSinceLastPlan: days,
+        reason: 'too_early',
+        nextAllowedAt
+      });
+    }
+
+    if (!wants) {
       const prompt = `
 ${memoryText}
 ${pinnedFacts}
@@ -193,7 +215,7 @@ ${greetingRule}- NO generes plan ni rutina (el usuario no lo pidió o no han pas
         reply,
         canChange,
         generatedPlan: false,
-        daysSinceLastPlan: days
+        daysSinceLastPlan: Number.isFinite(days) ? days : null
       });
     }
 
@@ -211,9 +233,10 @@ ${greetingRule}- NO generes plan ni rutina (el usuario no lo pidió o no han pas
       reply: result.reply,
       planJson: result.planJson || null,
       chosenExercises: result.chosenExercises || [],
-      canChange,
+      canChange: true,
       generatedPlan: !!result.planJson,
-      daysSinceLastPlan: days
+      daysSinceLastPlan: Number.isFinite(days) ? days : null,
+      firstTime: !lastPlanDate
     });
   } catch (err) {
     console.error(err);
