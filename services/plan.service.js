@@ -60,6 +60,7 @@ export async function generateMonthlyPlan({ userId, lastPlanDate, profile, histo
   const categories = mapGoalToCategories(prof.goal);
   const spec = deriveSafetySpec(prof);
 
+  const excludeNames = new Set(); 
 
   const { fetchCatalog } = await import('./catalog.service.js');
   const catalogs = {};
@@ -73,6 +74,7 @@ export async function generateMonthlyPlan({ userId, lastPlanDate, profile, histo
       limit: 40
     });
   }
+
   const lists = Object.entries(catalogs).map(([label, rows]) =>
     `CATÁLOGO ${label.toUpperCase()}:\n${compactList(rows, 18)}`
   ).join('\n\n');

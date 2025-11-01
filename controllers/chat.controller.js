@@ -97,15 +97,14 @@ export async function sendMessage(req, res) {
     if (!userRow) return res.status(404).json({ error: 'user_not_found' });
     const profile = mapUserRowToProfile(userRow);
 
- 
     const lastPlanDate = await getLastRoutineDate(userId); 
     const lastISO = lastPlanDate ? lastPlanDate.toISOString() : null;
 
     pushTurn(sid, 'user', message);
     const history = sessions.get(sid) || [];
 
-    const days = daysBetween(lastISO);
-    const canChange = days >= 30 || !lastPlanDate; 
+    const days = lastISO ? daysBetween(lastISO) : null;
+    const canChange = lastPlanDate ? days >= 30 : true; 
     const wants = wantsPlan(message, forcePlan);
 
     const recents = await getRecentSummaries(userId, 2);
@@ -121,6 +120,9 @@ export async function sendMessage(req, res) {
       ? "- Abre con un saludo breve una sola vez.\n"
       : "- NO saludes ni te presentes; enlaza con lo anterior.\n";
 
+    const lastPlanLine = lastPlanDate
+      ? `${lastPlanDate.toISOString().slice(0, 10)} (hace ${days} días)`
+      : 'ninguno';
     const pinnedFacts = `
 Perfil (desde BD):
 - UserID: ${userId}
@@ -130,7 +132,7 @@ Perfil (desde BD):
 - Objetivo: ${profile.goal ?? 'N/D'}
 - Entorno: ${profile.environment ?? 'home'}
 - Frecuencia: ${profile.frequency ?? '3'} días/semana
-- Último plan: ${lastPlanDate ? lastPlanDate.toISOString().slice(0, 10) : 'ninguno'} (hace ${Number.isFinite(days) ? days : '∞'} días)
+- Último plan: ${lastPlanLine}
 `.trim();
 
     const { week: askedWeek, day: askedDay } = extractWeekDay(message);
@@ -178,7 +180,7 @@ Perfil (desde BD):
       const nextAllowedAt = addDaysISO(lastISO, 30);
       const reply =
         `Aún no corresponde actualizar tu rutina. ` +
-        `Puedes volver a pedir una nueva a partir del ${nextAllowedAt}. ` +
+        `Puedes pedir una nueva a partir del ${nextAllowedAt}. ` +
         `Mientras tanto, ¿quieres que te recuerde qué toca hoy o prefieres tips para progresar con la actual?`;
       pushTurn(sid, 'assistant', reply);
       return res.json({
@@ -206,7 +208,7 @@ Instrucciones:
 ${greetingRule}- NO generes plan ni rutina (el usuario no lo pidió o no han pasado 30 días).
 - NO menciones la regla de 30 días salvo que el usuario pida plan/cambio.
 - Responde como coach: aclara dudas y ofrece 1–2 consejos accionables.
-- Si procede, indica que cuando escriba "quiero un plan" puedes crearlo (si ya pasaron 30 días).
+- Si procede, indica que cuando escriba "quiero una rutina" puedes crearla (si ya pasaron 30 días o si aún no tiene plan).
 `.trim();
 
       const reply = await runChatReply({ prompt, system_prompt });
@@ -233,13 +235,13 @@ ${greetingRule}- NO generes plan ni rutina (el usuario no lo pidió o no han pas
       reply: result.reply,
       planJson: result.planJson || null,
       chosenExercises: result.chosenExercises || [],
-      canChange: true,
+      canChange,
       generatedPlan: !!result.planJson,
-      daysSinceLastPlan: Number.isFinite(days) ? days : null,
-      firstTime: !lastPlanDate
+      daysSinceLastPlan: Number.isFinite(days) ? days : null
     });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'internal_error' });
   }
 }
+
