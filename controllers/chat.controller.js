@@ -25,33 +25,67 @@ const system_prompt =
   "Responde como coach: saluda solo en el primer turno de la sesión; luego continúa con naturalidad, sin presentarte. " +
   "Ofrece 1–2 consejos concretos. No inventes ni infieras datos personales.";
 
+// ---------- Helpers de fecha seguros ----------
+function safeIso(input) {
+  if (!input) return null;
+  if (input instanceof Date && !isNaN(input)) return input.toISOString();
+
+  if (typeof input === 'string') {
+    const candidate = input.includes('T')
+      ? input
+      : input.replace(' ', 'T') + 'Z';
+    const d = new Date(candidate);
+    return isNaN(d) ? null : d.toISOString();
+  }
+
+  const d = new Date(input);
+  return isNaN(d) ? null : d.toISOString();
+}
+
+function isoDay(input) {
+  const iso = safeIso(input);
+  return iso ? iso.slice(0, 10) : 'N/D';
+}
+
 function addDaysISO(iso, days) {
   const d = new Date(iso);
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
+// ---------- Controladores ----------
+
 export async function startSession(req, res) {
-  const { userId, sessionId } = req.body || {};
-  if (!userId) return res.status(400).json({ error: 'faltan datos' });
+  try {
+    const { userId, sessionId } = req.body || {};
+    if (!userId) return res.status(400).json({ error: 'faltan datos' });
 
-  const user = await getUserById(userId);
-  if (!user) return res.status(404).json({ error: 'user_not_found' });
+    const user = await getUserById(userId);
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
 
-  const sid = sessionId || `s-${userId}`;
-  if (!sessions.has(sid)) {
-    const seed = [];
-    const recents = await getRecentSummaries(userId, 2); // últimos 2
-    if (recents.length) {
-      const joined = recents
-        .map(r => `(${new Date(r.created_at).toISOString().slice(0, 10)}) ${r.summary}`)
-        .join('\n---\n');
-      seed.push({ role: 'context', text: `RESUMENES_ANTERIORES:\n${joined}` });
+    const sid = sessionId || `s-${userId}`;
+    if (!sessions.has(sid)) {
+      const seed = [];
+      const recents = await getRecentSummaries(userId, 2); // últimos 2
+
+      if (recents.length) {
+        const joined = recents
+          .map(r => `(${isoDay(r.created_at)}) ${r.summary}`)
+          .join('\n---\n');
+        seed.push({
+          role: 'context',
+          text: `RESUMENES_ANTERIORES:\n${joined}`,
+        });
+      }
+
+      sessions.set(sid, seed);
     }
-    sessions.set(sid, seed);
-  }
 
-  return res.json({ ok: true, sessionId: sid });
+    return res.json({ ok: true, sessionId: sid });
+  } catch (err) {
+    console.error('startSession error:', err);
+    return res.status(500).json({ ok: false, error: 'internal_error' });
+  }
 }
 
 export function resetSession(req, res) {
@@ -91,26 +125,27 @@ export async function sendMessage(req, res) {
     if (!userId || !message) {
       return res.status(400).json({ error: 'faltan parámetros' });
     }
+
     const sid = sessionId || `s-${userId}`;
 
     const userRow = await getUserById(userId);
     if (!userRow) return res.status(404).json({ error: 'user_not_found' });
     const profile = mapUserRowToProfile(userRow);
 
-    const lastPlanDate = await getLastRoutineDate(userId); 
-    const lastISO = lastPlanDate ? lastPlanDate.toISOString() : null;
+    const lastPlanDate = await getLastRoutineDate(userId);
+    const lastISO = safeIso(lastPlanDate);
 
     pushTurn(sid, 'user', message);
     const history = sessions.get(sid) || [];
 
     const days = lastISO ? daysBetween(lastISO) : null;
-    const canChange = lastPlanDate ? days >= 30 : true; 
+    const canChange = lastPlanDate ? days >= 30 : true;
     const wants = wantsPlan(message, forcePlan);
 
     const recents = await getRecentSummaries(userId, 2);
     const memoryText = recents.length
       ? `Memoria (últimos 2 resúmenes):\n${recents
-          .map(r => `(${new Date(r.created_at).toISOString().slice(0, 10)}) ${r.summary}`)
+          .map(r => `(${isoDay(r.created_at)}) ${r.summary}`)
           .join('\n---\n')}\n\n`
       : '';
 
@@ -120,9 +155,10 @@ export async function sendMessage(req, res) {
       ? "- Abre con un saludo breve una sola vez.\n"
       : "- NO saludes ni te presentes; enlaza con lo anterior.\n";
 
-    const lastPlanLine = lastPlanDate
-      ? `${lastPlanDate.toISOString().slice(0, 10)} (hace ${days} días)`
+    const lastPlanLine = lastISO
+      ? `${isoDay(lastISO)} (hace ${days} días)`
       : 'ninguno';
+
     const pinnedFacts = `
 Perfil (desde BD):
 - UserID: ${userId}
@@ -145,7 +181,9 @@ Perfil (desde BD):
           const exList = (d.exercises || [])
             .map(
               (e, i) =>
-                `${i + 1}. ${e.name} — ${e.sets} x ${e.reps} (descanso ${e.rest_sec}s${e.notes ? `, ${e.notes}` : ''})`
+                `${i + 1}. ${e.name} — ${e.sets} x ${e.reps} (descanso ${e.rest_sec}s${
+                  e.notes ? `, ${e.notes}` : ''
+                })`
             )
             .join('\n');
 
@@ -161,7 +199,7 @@ Perfil (desde BD):
             reply,
             canChange,
             generatedPlan: false,
-            daysSinceLastPlan: Number.isFinite(days) ? days : null
+            daysSinceLastPlan: Number.isFinite(days) ? days : null,
           });
         }
       }
@@ -172,7 +210,7 @@ Perfil (desde BD):
         reply: fallback,
         canChange,
         generatedPlan: false,
-        daysSinceLastPlan: Number.isFinite(days) ? days : null
+        daysSinceLastPlan: Number.isFinite(days) ? days : null,
       });
     }
 
@@ -189,7 +227,7 @@ Perfil (desde BD):
         generatedPlan: false,
         daysSinceLastPlan: days,
         reason: 'too_early',
-        nextAllowedAt
+        nextAllowedAt,
       });
     }
 
@@ -217,7 +255,7 @@ ${greetingRule}- NO generes plan ni rutina (el usuario no lo pidió o no han pas
         reply,
         canChange,
         generatedPlan: false,
-        daysSinceLastPlan: Number.isFinite(days) ? days : null
+        daysSinceLastPlan: Number.isFinite(days) ? days : null,
       });
     }
 
@@ -227,7 +265,7 @@ ${greetingRule}- NO generes plan ni rutina (el usuario no lo pidió o no han pas
       profile,
       history,
       pinnedFacts: `${memoryText}${pinnedFacts}`,
-      system_prompt
+      system_prompt,
     });
 
     pushTurn(sid, 'assistant', result.reply);
@@ -237,11 +275,16 @@ ${greetingRule}- NO generes plan ni rutina (el usuario no lo pidió o no han pas
       chosenExercises: result.chosenExercises || [],
       canChange,
       generatedPlan: !!result.planJson,
-      daysSinceLastPlan: Number.isFinite(days) ? days : null
+      daysSinceLastPlan: Number.isFinite(days) ? days : null,
     });
   } catch (err) {
-    console.error(err);
+    console.error('sendMessage error:', err);
     return res.status(500).json({ error: 'internal_error' });
   }
 }
 
+// ---------- No matar proceso en dev ----------
+process.on('unhandledRejection', (reason, p) => {
+  console.error('⚠️ Unhandled Rejection at:', p, 'reason:', reason);
+  // No cierres el proceso, solo loguea
+});
