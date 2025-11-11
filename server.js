@@ -2,6 +2,7 @@ import './config/env.js';
 import express from 'express';
 import cors from 'cors';
 import { pool } from './data/db.js';
+import { cfg } from './config/env.js';
 
 import chatRoutes from './routes/chat.routes.js';
 import routineRoutes from './routes/routine.routes.js';
@@ -14,6 +15,22 @@ app.use(express.json({ limit: '2mb' }));
 
 app.use('/', routineRoutes);  
 app.use('/', chatRoutes);     
+
+// --- Swagger UI (abrigamos openapi.json creado en la raíz) ---
+import swaggerUi from 'swagger-ui-express';
+import fs from 'fs';
+import path from 'path';
+
+const openapiPath = path.resolve('./openapi.json');
+let openapiSpec = null;
+try {
+  openapiSpec = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+  app.use('/openapi.json', (_req, res) => res.json(openapiSpec));
+  app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
+  console.log('Swagger UI disponible en /docs');
+} catch (e) {
+  console.warn('No se pudo cargar openapi.json:', e.message);
+}
 
 app.get('/health', async (_req, res) => {
   try {
@@ -33,7 +50,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'internal_error' });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || Number(cfg.PORT) || 3000;
 const server = app.listen(PORT, () => {
   console.log(`Chat API en puerto ${PORT}`);
 });

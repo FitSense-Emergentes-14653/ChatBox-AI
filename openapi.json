@@ -1,0 +1,250 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "FitSense Chat API",
+    "version": "1.0.0",
+    "description": "API para el chatbot FitSense — endpoints para manejar sesiones de chat y obtener la rutina actual."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8085",
+      "description": "Servidor local"
+    }
+  ],
+  "tags": [
+    { "name": "Chatbot", "description": "Endpoints relacionados con el chat, sesiones y generación de planes" },
+    { "name": "Rutina", "description": "Endpoints relacionados con rutinas y día siguiente" }
+  ],
+  "paths": {
+    "/session/start": {
+      "post": {
+        "tags": ["Chatbot"],
+        "summary": "Iniciar sesión de chat",
+        "description": "Crea (o recupera) una sesión de chat para un usuario y devuelve el sessionId.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": { "type": "string" },
+                  "sessionId": { "type": "string", "nullable": true }
+                },
+                "required": ["userId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sesión iniciada/recuperada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "sessionId": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Faltan datos" },
+          "404": { "description": "Usuario no encontrado" },
+          "500": { "description": "Error interno" }
+        }
+      }
+    },
+    "/session/reset": {
+      "post": {
+        "tags": ["Chatbot"],
+        "summary": "Resetear sesión",
+        "description": "Elimina la sesión en memoria para el userId o sessionId (si existe).",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": { "type": "string" },
+                  "sessionId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sesión reseteada",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } } } }
+          }
+        }
+      }
+    },
+    "/session/end": {
+      "post": {
+        "tags": ["Chatbot"],
+        "summary": "Finalizar sesión",
+        "description": "Finaliza la sesión, genera y guarda un resumen si hay historial.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": { "type": "string" },
+                  "sessionId": { "type": "string", "nullable": true }
+                },
+                "required": ["userId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sesión finalizada",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "saved": { "type": "boolean" },
+                    "reason": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Faltan parámetros" },
+          "404": { "description": "Usuario no encontrado" },
+          "500": { "description": "Error interno" }
+        }
+      }
+    },
+    "/chat/send": {
+      "post": {
+        "tags": ["Chatbot"],
+        "summary": "Enviar mensaje al chat",
+        "description": "Envía un mensaje del usuario, el servidor puede responder con texto o generar un plan.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": { "type": "string" },
+                  "sessionId": { "type": "string", "nullable": true },
+                  "message": { "type": "string" },
+                  "forcePlan": { "type": "boolean", "default": false }
+                },
+                "required": ["userId", "message"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Respuesta del asistente",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reply": { "type": "string" },
+                    "canChange": { "type": "boolean" },
+                    "generatedPlan": { "type": "boolean" },
+                    "planJson": { "type": "object", "nullable": true },
+                    "chosenExercises": { "type": "array", "items": { "type": "object" } },
+                    "daysSinceLastPlan": { "type": "integer", "nullable": true }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Faltan parámetros" },
+          "404": { "description": "Usuario no encontrado" },
+          "500": { "description": "Error interno" }
+        }
+      }
+    },
+    "/routine/current": {
+      "get": {
+        "tags": ["Rutina"],
+        "summary": "Obtener rutina actual / siguiente día",
+        "description": "Devuelve si el usuario tiene plan y, si hay día siguiente, lo detalla.",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "noHistory",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Información de la rutina",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "hasPlan": { "type": "boolean", "enum": [false] },
+                        "message": { "type": "string" }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "hasPlan": { "type": "boolean", "enum": [true] },
+                        "planCreatedAt": { "type": "string" },
+                        "sessionsDone": { "type": "integer" },
+                        "totalDays": { "type": "integer" },
+                        "nextIndex": { "type": "integer" },
+                        "today": {
+                          "type": "object",
+                          "properties": {
+                            "name": { "type": "string" },
+                            "warmup": { "type": "string" },
+                            "exercises": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": { "type": "string" },
+                                  "sets": { "type": "integer" },
+                                  "reps": { "type": "string" },
+                                  "rest_sec": { "type": "integer" }
+                                }
+                              }
+                            },
+                            "cooldown": { "type": "string" }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": { "description": "Faltan parámetros" },
+          "500": { "description": "Error interno" }
+        }
+      }
+    }
+  }
+}
