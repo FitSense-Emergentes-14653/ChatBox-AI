@@ -1,7 +1,7 @@
 import { pushTurn, sessions, recentBlock } from '../utils/historyMem.js';
 import { daysBetween } from '../utils/time.js';
 import { wantsPlan } from '../utils/intent.js';
-import { extractWeekDay } from '../utils/parseWeekday.js';
+import { extractWeekDay } from '../utils/parseWeekDay.js';
 
 import { runChatReply } from '../services/ai.service.js';
 import { generateMonthlyPlan } from '../services/plan.service.js';
