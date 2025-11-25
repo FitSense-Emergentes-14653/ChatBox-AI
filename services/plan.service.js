@@ -8,6 +8,7 @@ import {
 } from './profile.service.js';
 import { saveRoutine } from '../repos/routines.repo.js';
 
+/* ---------------------------- JSON extraction ---------------------------- */
 function extractJsonBlock(text = '') {
   const m = text.match(/```json\s*([\s\S]*?)```/i);
   if (m) return m[1].trim();
@@ -16,6 +17,59 @@ function extractJsonBlock(text = '') {
   return null;
 }
 
+/* ----------------- Fix / Ensure correct days per frequency ---------------- */
+function validateFrequencyMatchesPlan(plan, prof) {
+  const freq = prof.frequency; // SIEMPRE usar la frecuencia real del usuario
+
+  if (!Array.isArray(plan.weeks) || plan.weeks.length === 0) {
+    throw new Error('El plan no contiene semanas.');
+  }
+
+  // 1) Normalizar semanas
+  plan.weeks.forEach((w, idx) => {
+    w.week = idx + 1;
+  });
+
+  // 2) Forzar siempre 4 semanas
+  const TARGET_WEEKS = 4;
+  if (plan.weeks.length < TARGET_WEEKS) {
+    const base = plan.weeks.map(w => structuredClone(w));
+    let i = 0;
+    while (plan.weeks.length < TARGET_WEEKS) {
+      const cloned = structuredClone(base[i % base.length]);
+      cloned.week = plan.weeks.length + 1;
+      plan.weeks.push(cloned);
+      i++;
+    }
+  } else if (plan.weeks.length > TARGET_WEEKS) {
+    plan.weeks = plan.weeks.slice(0, TARGET_WEEKS);
+  }
+
+  // 3) Armar los días según frecuencia
+  for (const w of plan.weeks) {
+    if (!Array.isArray(w.days)) {
+      throw new Error(`La semana ${w.week} no tiene días definidos.`);
+    }
+
+    const baseDays = w.days.map(d => structuredClone(d));
+
+    // Expandir
+    while (w.days.length < freq) {
+      const clone = structuredClone(baseDays[w.days.length % baseDays.length]);
+      clone.name = clone.name.replace(/Día\s+\d+/i, `Día ${w.days.length + 1}`);
+      w.days.push(clone);
+    }
+
+    // Recortar si sobran
+    if (w.days.length > freq) {
+      w.days = w.days.slice(0, freq);
+    }
+  }
+}
+
+
+
+/* ------------------------ Exercise image injection ------------------------ */
 function collectExerciseNames(plan) {
   if (!plan?.weeks?.length) return [];
   const names = [];
@@ -50,6 +104,7 @@ async function enrichPlanWithImages(planJson) {
   return planJson;
 }
 
+/* ------------------------------ Markdown Plan ----------------------------- */
 function renderPlanMarkdown(plan, { showWeekTitles = true } = {}) {
   if (!plan?.weeks?.length) return 'No pude construir el plan.';
   const lines = [];
@@ -82,7 +137,7 @@ function renderPlanMarkdown(plan, { showWeekTitles = true } = {}) {
   return lines.join('\n');
 }
 
-
+/* --------------------------- MAIN PLAN GENERATOR -------------------------- */
 export async function generateMonthlyPlan({
   userId,
   lastPlanDate,
@@ -98,6 +153,7 @@ export async function generateMonthlyPlan({
   const categories = mapGoalToCategories(prof.goal);
   const spec = deriveSafetySpec(prof);
 
+  /* ------------------ Fetch catalogs from DB (your exercises) --------------- */
   const { fetchCatalog } = await import('./catalog.service.js');
   const catalogs = {};
   for (const dayLabel of spec.daySplits) {
@@ -111,55 +167,132 @@ export async function generateMonthlyPlan({
     });
   }
 
+  /* -------------------------- Format catalogs for AI ------------------------ */
   const compactList = (rows, max = 18) =>
     rows.slice(0, max).map((r, i) =>
-      `${i + 1}. ${r.name} — ${r.primary_muscle} | ${r.level} | ${r.equipment}`
+      `${i + 1}. ${r.name} — músculo: ${r.primary_muscle} | nivel: ${r.level} | equipo: ${r.equipment} | mecánica: ${r.mechanic ?? 'N/A'} | categoría: ${r.category ?? 'N/A'}`
     ).join('\n');
 
   const lists = Object.entries(catalogs).map(
     ([label, rows]) => `CATÁLOGO ${label.toUpperCase()}:\n${compactList(rows, 18)}`
   ).join('\n\n');
 
-  const planPrompt = `
+  /* ------------------------------- AI PROMPT PRO ---------------------------- */
+const planPrompt = `
 ${pinnedFacts}
-Contexto reciente:
-${history.map(m => `${m.role.toUpperCase()}: ${m.text}`).join('\n') || '(sin contexto)'}
+Eres FitSense, un entrenador personal profesional. Tu tarea es GENERAR UN PLAN MENSUAL COMPLETO Y SEGURO basado en el perfil del usuario (edad, nivel, objetivo, entorno, equipo disponible y condiciones médicas).
 
-Perfil normalizado:
-${JSON.stringify(prof, null, 2)}
+Tu salida SIEMPRE debe ser **exclusivamente un JSON válido**, sin texto adicional antes o después.
 
-Especificación de seguridad/volumen:
-${JSON.stringify({ reps: spec.reps, rest_sec: spec.rest, cues: spec.cues, daySplits: spec.daySplits }, null, 2)}
+====================================================================
+🔒 REGLAS ESTRICTAS (OBLIGATORIAS)
+====================================================================
 
-Catálogos (EXCLUSIVAMENTE desde la BASE DE DATOS):
+1. El plan SIEMPRE debe tener EXACTAMENTE 4 semanas.
+2. Cada semana debe tener EXACTAMENTE ${prof.frequency} días.
+3. Los nombres de los días deben ser EXACTAMENTE:
+   ${spec.daySplits.map((d,i)=>`"Día ${i+1} - ${d}"`).join(", ")}
+
+4. Cada día debe contener OBLIGATORIAMENTE:
+   - warmup: cadena corta (5–8 min)
+   - exercises: EXACTAMENTE 3 ejercicios del catálogo
+   - cooldown: cadena corta (5 min)
+
+5. Elige SOLO ejercicios del catálogo REAL (en inglés):
 ${lists}
 
-Tarea:
-- Genera un PLAN MENSUAL (4 semanas) con ${prof.frequency} días/semana siguiendo "daySplits".
-- Repetir ejercicios entre semanas es válido.
-- Adapta volumen e intensidad a edad, nivel, objetivo, entorno y condiciones.
-- Semana 4 = deload (~20% menos volumen o -1 serie).
-- Incluye calentamiento (5–8 min) y enfriamiento por día.
-- Elige SOLO nombres de ejercicios que están en los catálogos.
+6. NO inventar ejercicios.
+7. NO modificar nombres.
+8. NO traducir nombres del catálogo.
+9. NO agregar notas, texto libre, ni formato fuera del JSON.
 
-SALIDA:
-Devuelve **SOLO** un bloque \`\`\`json\`\`\` con la forma EXACTA:
+====================================================================
+🧠 MAPEOS INTERNOS (para el modelo, NO para el usuario)
+====================================================================
+
+Usa estos mapeos para que el modelo entienda reglas en español, pero elija ejercicios en inglés:
+
+**Upper (parte superior)**
+- push = chest/triceps
+- pull = back/biceps
+- shoulders = delts
+- arms = biceps/triceps
+
+**Lower (parte inferior)**
+- squat pattern = sentadilla
+- hinge pattern = deadlift/hip hinge
+- posterior chain = glutes/hamstrings
+- isolation = quads/glutes focus
+
+**Core**
+- anti-extension = planks, dead bug
+- anti-rotation = pallof press, bird dog
+- anti-lateral-flexion = side plank
+
+====================================================================
+⚕️ REGLAS DE SEGURIDAD POR PERFIL
+====================================================================
+
+Edad:
+- older75: prohibido impacto, saltos, snatches, cleans, good mornings, deadlift pesado.
+- senior60: priorizar máquinas, cable, dumbbells, movilidad ligera.
+
+Objetivo:
+- fat_loss: ejercicios compuestos y dinámicos, descansos más cortos.
+- hypertrophy: 8–12 reps, combinación compuestos + aislamiento.
+- strength: 4–6 reps, patrones multiarticulares.
+- beginner: evitar movimientos complejos o riesgosos.
+
+Entorno:
+- home: solo usar equipo declarado.
+- home sin equipo: SOLO bodyweight.
+
+Contraindicaciones:
+- knee_pain: evitar impacto, box jumps, sentadillas muy profundas.
+- lower_back_pain: evitar deadlift pesado, good mornings, hip hinge avanzado.
+- shoulder_pain: evitar overhead pesado, upright row, dips.
+
+====================================================================
+🧩 SPLITS OBLIGATORIOS SEGÚN FRECUENCIA
+====================================================================
+${spec.daySplits.map((d,i)=>`Día ${i+1}: ${d}`).join("\n")}
+
+====================================================================
+📦 FORMATO DE RESPUESTA (ESTRICTO JSON)
+====================================================================
+
+Responde SOLO así:
 
 {
   "weeks": [
-    { "week": 1, "days": [
-      { "name": "Día X - <Label>", "warmup": "…", "exercises": [
-        { "name": "NombreExactoDeLaLista", "sets": 3, "reps": "${spec.reps}", "rest_sec": ${spec.rest}, "notes": "opcional" }
-      ], "cooldown": "…" }
-    ]},
-    { "week": 2, "days": [ ... ]},
-    { "week": 3, "days": [ ... ]},
-    { "week": 4, "days": [ ... ]}
+    {
+      "week": 1,
+      "days": [
+        {
+          "name": "Día 1 - Upper",
+          "warmup": "5–8 min ...",
+          "exercises": [
+            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8–12", "rest_sec": 90 },
+            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8–12", "rest_sec": 90 },
+            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8–12", "rest_sec": 90 }
+          ],
+          "cooldown": "5 min estiramientos"
+        }
+      ]
+    },
+    { "week": 2, "days": [...] },
+    { "week": 3, "days": [...] },
+    { "week": 4, "days": [...] }
   ],
-  "global_notes": "indicaciones de seguridad, técnica y progresión"
+  "frequency": ${prof.frequency},
+  "global_notes": "técnica, seguridad y progresión"
 }
+
+NO INCLUYAS NADA MÁS. Sin explicaciones, sin texto extra.
+
 `.trim();
 
+  /* ------------------------------- RUN THE AI ------------------------------- */
   const raw = await runChatReply({ prompt: planPrompt, system_prompt });
 
   let parsedPlan = null;
@@ -171,9 +304,10 @@ Devuelve **SOLO** un bloque \`\`\`json\`\`\` con la forma EXACTA:
     if (jsonText) {
       parsedPlan = JSON.parse(jsonText);
 
-      if (prof?.frequency && !parsedPlan.frequency) {
-        parsedPlan.frequency = prof.frequency;
-      }
+      parsedPlan.frequency = prof.frequency;
+
+
+      validateFrequencyMatchesPlan(parsedPlan, prof);
 
       parsedPlan = await enrichPlanWithImages(parsedPlan);
 

@@ -1,3 +1,5 @@
+import { getDaySplitsFromFrequency } from './slipts.service.js';
+
 export function normalizeProfile(raw = {}) {
   const p = { ...raw };
   p.age = Number.isFinite(+p.age) ? +p.age : null;
@@ -90,13 +92,8 @@ export function deriveSafetySpec(p) {
   if (p.conditions.includes('obesity')) add(/burpee|high impact run/i);
   if (p.conditions.includes('post_surgery')) add(/max effort|olympic lift/i);
 
-  const daySplits = {
-    2:  ['Full', 'Full/Movilidad'],
-    3:  ['Upper', 'Lower', 'Core/Mob'],
-    4:  ['Upper', 'Lower', 'Pull/Core', 'Mob/Core'],
-    5:  ['Push', 'Pull', 'Legs', 'Core', 'Mob/Cardio'],
-    6:  ['Upper', 'Lower', 'Push', 'Pull', 'Legs', 'Core/Mob']
-  }[p.frequency] || ['Upper', 'Lower', 'Core/Mob'];
+  const daySplits = getDaySplitsFromFrequency(p.frequency);
+
 
   return { reps: goalAdj.reps || ageBase.reps, rest: goalAdj.rest || ageBase.rest, cues: ageBase.cues, contraindications, daySplits };
 }
