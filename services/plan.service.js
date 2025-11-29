@@ -104,6 +104,50 @@ async function enrichPlanWithImages(planJson) {
   return planJson;
 }
 
+/* ------------------------- Calorías por ejercicio ------------------------- */
+
+// Estimar MET según nombre del ejercicio
+function estimateMET(exName) {
+  const n = exName.toLowerCase();
+
+  if (n.includes('squat') || n.includes('lunge') || n.includes('deadlift'))
+    return 5.5;
+  if (n.includes('bench') || n.includes('press'))
+    return 4.0;
+  if (n.includes('row') || n.includes('pull'))
+    return 4.5;
+  if (n.includes('core') || n.includes('crunch') || n.includes('plank'))
+    return 3.3;
+  if (n.includes('bike') || n.includes('cardio'))
+    return 6.0;
+
+  return 4.0; // Default MET
+}
+
+// Fórmula: MET × peso × horas
+function calcCalories(met, weightKg, minutes = 8) {
+  const hours = minutes / 60;
+  return Math.round(met * (weightKg || 70) * hours);
+}
+
+// Agregar calorías a cada ejercicio del plan
+function addCaloriesToPlan(plan, prof) {
+  const weight = prof.weightKg || 70;
+
+  for (const w of plan.weeks) {
+    for (const d of w.days) {
+      for (const e of d.exercises) {
+        const met = estimateMET(e.name);
+        const calories = calcCalories(met, weight, 8);
+        e.calories_total = calories;
+      }
+    }
+  }
+
+  return plan;
+}
+
+
 /* ------------------------------ Markdown Plan ----------------------------- */
 function renderPlanMarkdown(plan, { showWeekTitles = true } = {}) {
   if (!plan?.weeks?.length) return 'No pude construir el plan.';
@@ -180,89 +224,89 @@ export async function generateMonthlyPlan({
   /* ------------------------------- AI PROMPT PRO ---------------------------- */
 const planPrompt = `
 ${pinnedFacts}
-Eres FitSense, un entrenador personal profesional. Tu tarea es GENERAR UN PLAN MENSUAL COMPLETO Y SEGURO basado en el perfil del usuario (edad, nivel, objetivo, entorno, equipo disponible y condiciones médicas).
 
-Tu salida SIEMPRE debe ser **exclusivamente un JSON válido**, sin texto adicional antes o después.
+Eres FitSense, un entrenador personal profesional. Genera un PLAN MENSUAL COMPLETO basado SOLO en los ejercicios del catálogo (BD real).
 
-====================================================================
-🔒 REGLAS ESTRICTAS (OBLIGATORIAS)
-====================================================================
+OBJETIVO:
+Crear un plan 100% seguro, adaptable y profesional según:
+- edad
+- nivel
+- objetivo
+- equipo disponible
+- entorno
+- condiciones médicas y contraindicaciones
 
+REGLAS ESTRICTAS:
 1. El plan SIEMPRE debe tener EXACTAMENTE 4 semanas.
 2. Cada semana debe tener EXACTAMENTE ${prof.frequency} días.
-3. Los nombres de los días deben ser EXACTAMENTE:
-   ${spec.daySplits.map((d,i)=>`"Día ${i+1} - ${d}"`).join(", ")}
+3. Cada semana DEBE tener EXACTAMENTE ${prof.frequency} días.
+4. Usa esta lista de SPLITS según frecuencia (OBLIGATORIO):
+   ${spec.daySplits.map((d,i)=>`Día ${i+1}: ${d}`).join("\n   ")}
+5. SOLO usar ejercicios del CATÁLOGO. NO inventar nombres.
+6. Cada día debe contener:
+   - warmup (5–8 min)
+   - exercises[] (3 ejercicios validos)
+   - cooldown (5 min)
 
-4. Cada día debe contener OBLIGATORIAMENTE:
-   - warmup: cadena corta (5–8 min)
-   - exercises: EXACTAMENTE 3 ejercicios del catálogo
-   - cooldown: cadena corta (5 min)
-
-5. Elige SOLO ejercicios del catálogo REAL (en inglés):
-${lists}
-
-6. NO inventar ejercicios.
-7. NO modificar nombres.
-8. NO traducir nombres del catálogo.
-9. NO agregar notas, texto libre, ni formato fuera del JSON.
-
-====================================================================
-🧠 MAPEOS INTERNOS (para el modelo, NO para el usuario)
-====================================================================
-
-Usa estos mapeos para que el modelo entienda reglas en español, pero elija ejercicios en inglés:
-
-**Upper (parte superior)**
-- push = chest/triceps
-- pull = back/biceps
-- shoulders = delts
-- arms = biceps/triceps
-
-**Lower (parte inferior)**
-- squat pattern = sentadilla
-- hinge pattern = deadlift/hip hinge
-- posterior chain = glutes/hamstrings
-- isolation = quads/glutes focus
-
-**Core**
-- anti-extension = planks, dead bug
-- anti-rotation = pallof press, bird dog
-- anti-lateral-flexion = side plank
-
-====================================================================
-⚕️ REGLAS DE SEGURIDAD POR PERFIL
-====================================================================
+REGLAS DE SELECCIÓN POR PERFIL:
 
 Edad:
-- older75: prohibido impacto, saltos, snatches, cleans, good mornings, deadlift pesado.
-- senior60: priorizar máquinas, cable, dumbbells, movilidad ligera.
+- older75:
+  evitar impacto, plyometrics, cargas pesadas, barras pesadas, cleans, snatches, good mornings.
+- senior60:
+  favorecer máquinas, cables, dumbbell, movilidad y cargas ligeras.
 
-Objetivo:
-- fat_loss: ejercicios compuestos y dinámicos, descansos más cortos.
-- hypertrophy: 8–12 reps, combinación compuestos + aislamiento.
-- strength: 4–6 reps, patrones multiarticulares.
-- beginner: evitar movimientos complejos o riesgosos.
+Meta:
+- fatloss: +compuestos, +movimiento, descansos cortos.
+- hypertrophy: 8–12 reps, compuestos + aislamiento.
+- strength: 4–6 reps, ejercicios multiarticulares.
+- beginner: evitar ejercicios complejos o de riesgo.
 
 Entorno:
-- home: solo usar equipo declarado.
+- home: solo equipo disponible.
 - home sin equipo: SOLO bodyweight.
 
 Contraindicaciones:
-- knee_pain: evitar impacto, box jumps, sentadillas muy profundas.
-- lower_back_pain: evitar deadlift pesado, good mornings, hip hinge avanzado.
-- shoulder_pain: evitar overhead pesado, upright row, dips.
+- Dolor lumbar: evitar deadlifts pesados, hip hinge avanzado, good mornings.
+- Dolor de rodilla: evitar impacto, jumping, deep squats avanzados.
+- Dolor de hombro: evitar overhead pesado, upright rows, dips.
 
-====================================================================
-🧩 SPLITS OBLIGATORIOS SEGÚN FRECUENCIA
-====================================================================
-${spec.daySplits.map((d,i)=>`Día ${i+1}: ${d}`).join("\n")}
+Mapeo muscular obligatorio:
 
-====================================================================
-📦 FORMATO DE RESPUESTA (ESTRICTO JSON)
-====================================================================
+Upper:
+- pecho, espalda, hombros, tríceps, bíceps
 
-Responde SOLO así:
+Lower:
+- quadriceps, hamstrings, glutes, calves
 
+Core/Mob:
+- abdominals, obliques, estabilidad
+
+Patrones mínimos por día:
+Upper:
+- 1 empuje
+- 1 tracción
+- 1 hombro
+- 1 brazo
+
+Lower:
+- 1 squat
+- 1 hip hinge
+- 1 posterior chain
+- 1 aislado (piernas)
+
+Core:
+- 1 anti-extensión
+- 1 anti-rotación
+- 1 anti-lateral-flexión
+
+CATÁLOGOS (BD real, ejercicios válidos):
+${lists}
+
+Los días de cada semana deben ser EXACTAMENTE los siguientes nombres (OBLIGATORIO):  
+${spec.daySplits.map((d,i)=>`"Día ${i+1} - ${d}"`).join(", ")}
+
+FORMATO OBLIGATORIO (JSON):
 {
   "weeks": [
     {
@@ -270,26 +314,21 @@ Responde SOLO así:
       "days": [
         {
           "name": "Día 1 - Upper",
-          "warmup": "5–8 min ...",
+          "warmup": "…",
           "exercises": [
-            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8–12", "rest_sec": 90 },
-            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8–12", "rest_sec": 90 },
-            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8–12", "rest_sec": 90 }
+            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8-12", "rest_sec": 90, calories_total: 50 },
           ],
-          "cooldown": "5 min estiramientos"
+          "cooldown": "…"
         }
       ]
     },
-    { "week": 2, "days": [...] },
-    { "week": 3, "days": [...] },
-    { "week": 4, "days": [...] }
+    { "week": 2, "days": [ … ] },
+    { "week": 3, "days": [ … ] },
+    { "week": 4, "days": [ … ] }
   ],
   "frequency": ${prof.frequency},
   "global_notes": "técnica, seguridad y progresión"
 }
-
-NO INCLUYAS NADA MÁS. Sin explicaciones, sin texto extra.
-
 `.trim();
 
   /* ------------------------------- RUN THE AI ------------------------------- */
@@ -310,6 +349,8 @@ NO INCLUYAS NADA MÁS. Sin explicaciones, sin texto extra.
       validateFrequencyMatchesPlan(parsedPlan, prof);
 
       parsedPlan = await enrichPlanWithImages(parsedPlan);
+      parsedPlan = addCaloriesToPlan(parsedPlan, prof);
+
 
       await saveRoutine(userId, parsedPlan);
 

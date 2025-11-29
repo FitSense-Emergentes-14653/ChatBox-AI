@@ -174,53 +174,45 @@ Perfil (desde BD):
     const { week: askedWeek, day: askedDay } = extractWeekDay(message);
     if (askedDay) {
       const latest = await getLatestRoutine(userId);
+      if (latest?.plan) {
+        const pick = pickPlanDay(latest.plan, askedWeek || 1, askedDay);
+        if (pick?.day) {
+          const d = pick.day;
+          const exList = (d.exercises || [])
+            .map(
+              (e, i) =>
+                `${i + 1}. ${e.name} — ${e.sets} x ${e.reps} (descanso ${e.rest_sec}s${
+                  e.notes ? `, ${e.notes}` : ''
+                })`
+            )
+            .join('\n');
 
-      if (!latest?.plan) {
-        const fallback = "No encuentro un plan guardado aún. ¿Quieres generar una nueva rutina?";
-        pushTurn(sid, 'assistant', fallback);
-        return res.json({ reply: fallback, canChange, generatedPlan: false });
+          const reply =
+            `Tu entrenamiento para ${askedWeek ? `Semana ${askedWeek}, ` : ''}Día ${askedDay} es:\n\n` +
+            `**${d.name}**\n` +
+            (d.warmup ? `Calentamiento: ${d.warmup}\n` : '') +
+            (exList ? `${exList}\n` : '') +
+            (d.cooldown ? `Enfriamiento: ${d.cooldown}` : '');
+
+          pushTurn(sid, 'assistant', reply);
+          return res.json({
+            reply,
+            canChange,
+            generatedPlan: false,
+            daysSinceLastPlan: Number.isFinite(days) ? days : null,
+          });
+        }
       }
-
-      const freq = profile.frequency || 3;
-
-      // --- Validación estricta ---
-      if (askedWeek < 1 || askedWeek > 4) {
-        const reply = `Tu plan solo tiene 4 semanas. Dime un número entre 1 y 4.`;
-        pushTurn(sid, 'assistant', reply);
-        return res.json({ reply, generatedPlan: false, canChange });
-      }
-
-      if (askedDay < 1 || askedDay > freq) {
-        const reply = `La semana ${askedWeek} tiene **${freq} días**. Dime un día entre **1 y ${freq}**.`;
-        pushTurn(sid, 'assistant', reply);
-        return res.json({ reply, generatedPlan: false, canChange });
-      }
-
-      // --- Obtención correcta del día ---
-      const pick = pickPlanDay(latest.plan, askedWeek, askedDay);
-
-      if (pick?.day) {
-        const d = pick.day;
-        const exList = (d.exercises || [])
-          .map((e, i) => `${i + 1}. ${e.name} — ${e.sets} x ${e.reps} (descanso ${e.rest_sec}s)`)
-          .join("\n");
-
-        const reply =
-          `Tu entrenamiento para Semana ${askedWeek}, Día ${askedDay} es:\n\n` +
-          `**${d.name}**\n` +
-          (d.warmup ? `Calentamiento: ${d.warmup}\n` : '') +
-          exList + "\n" +
-          (d.cooldown ? `Enfriamiento: ${d.cooldown}` : '');
-
-        pushTurn(sid, 'assistant', reply);
-        return res.json({
-          reply,
-          canChange,
-          generatedPlan: false
-        });
-      }
+      const fallback =
+        "No encuentro un plan guardado para ese día. ¿Quieres que te muestre tu rutina más reciente o generar una nueva?";
+      pushTurn(sid, 'assistant', fallback);
+      return res.json({
+        reply: fallback,
+        canChange,
+        generatedPlan: false,
+        daysSinceLastPlan: Number.isFinite(days) ? days : null,
+      });
     }
-
 
     if (wants && lastISO && days < 30) {
       const nextAllowedAt = addDaysISO(lastISO, 30);
