@@ -8,29 +8,41 @@ import {
 } from './profile.service.js';
 import { saveRoutine } from '../repos/routines.repo.js';
 
-/* ---------------------------- JSON extraction ---------------------------- */
 function extractJsonBlock(text = '') {
-  const m = text.match(/```json\s*([\s\S]*?)```/i);
+  let m = text.match(/```json\s*([\s\S]*?)```/i);
   if (m) return m[1].trim();
-  const t = text.trim();
-  if (t.startsWith('{') && /"weeks"\s*:/.test(t)) return t;
+
+  m = text.match(/\{[\s\S]*\}/);
+  if (m) {
+    const candidate = m[0];
+    try { JSON.parse(candidate); return candidate; } catch {}
+  }
+
+  const idx = text.indexOf('"weeks"');
+  if (idx !== -1) {
+    const start = text.lastIndexOf('{', idx);
+    const end = text.indexOf('}', idx);
+    if (start !== -1 && end !== -1) {
+      const candidate = text.slice(start, end + 1);
+      try { JSON.parse(candidate); return candidate; } catch {}
+    }
+  }
+
   return null;
 }
 
-/* ----------------- Fix / Ensure correct days per frequency ---------------- */
+
 function validateFrequencyMatchesPlan(plan, prof) {
-  const freq = prof.frequency; // SIEMPRE usar la frecuencia real del usuario
+  const freq = prof.frequency; 
 
   if (!Array.isArray(plan.weeks) || plan.weeks.length === 0) {
     throw new Error('El plan no contiene semanas.');
   }
 
-  // 1) Normalizar semanas
   plan.weeks.forEach((w, idx) => {
     w.week = idx + 1;
   });
 
-  // 2) Forzar siempre 4 semanas
   const TARGET_WEEKS = 4;
   if (plan.weeks.length < TARGET_WEEKS) {
     const base = plan.weeks.map(w => structuredClone(w));
@@ -45,7 +57,6 @@ function validateFrequencyMatchesPlan(plan, prof) {
     plan.weeks = plan.weeks.slice(0, TARGET_WEEKS);
   }
 
-  // 3) Armar los días según frecuencia
   for (const w of plan.weeks) {
     if (!Array.isArray(w.days)) {
       throw new Error(`La semana ${w.week} no tiene días definidos.`);
@@ -53,14 +64,12 @@ function validateFrequencyMatchesPlan(plan, prof) {
 
     const baseDays = w.days.map(d => structuredClone(d));
 
-    // Expandir
     while (w.days.length < freq) {
       const clone = structuredClone(baseDays[w.days.length % baseDays.length]);
       clone.name = clone.name.replace(/Día\s+\d+/i, `Día ${w.days.length + 1}`);
       w.days.push(clone);
     }
 
-    // Recortar si sobran
     if (w.days.length > freq) {
       w.days = w.days.slice(0, freq);
     }
@@ -69,7 +78,6 @@ function validateFrequencyMatchesPlan(plan, prof) {
 
 
 
-/* ------------------------ Exercise image injection ------------------------ */
 function collectExerciseNames(plan) {
   if (!plan?.weeks?.length) return [];
   const names = [];
@@ -104,9 +112,7 @@ async function enrichPlanWithImages(planJson) {
   return planJson;
 }
 
-/* ------------------------- Calorías por ejercicio ------------------------- */
 
-// Estimar MET según nombre del ejercicio
 function estimateMET(exName) {
   const n = exName.toLowerCase();
 
@@ -121,16 +127,14 @@ function estimateMET(exName) {
   if (n.includes('bike') || n.includes('cardio'))
     return 6.0;
 
-  return 4.0; // Default MET
+  return 4.0; 
 }
 
-// Fórmula: MET × peso × horas
 function calcCalories(met, weightKg, minutes = 8) {
   const hours = minutes / 60;
   return Math.round(met * (weightKg || 70) * hours);
 }
 
-// Agregar calorías a cada ejercicio del plan
 function addCaloriesToPlan(plan, prof) {
   const weight = prof.weightKg || 70;
 
@@ -148,7 +152,6 @@ function addCaloriesToPlan(plan, prof) {
 }
 
 
-/* ------------------------------ Markdown Plan ----------------------------- */
 function renderPlanMarkdown(plan, { showWeekTitles = true } = {}) {
   if (!plan?.weeks?.length) return 'No pude construir el plan.';
   const lines = [];
@@ -181,7 +184,6 @@ function renderPlanMarkdown(plan, { showWeekTitles = true } = {}) {
   return lines.join('\n');
 }
 
-/* --------------------------- MAIN PLAN GENERATOR -------------------------- */
 export async function generateMonthlyPlan({
   userId,
   lastPlanDate,
@@ -197,7 +199,6 @@ export async function generateMonthlyPlan({
   const categories = mapGoalToCategories(prof.goal);
   const spec = deriveSafetySpec(prof);
 
-  /* ------------------ Fetch catalogs from DB (your exercises) --------------- */
   const { fetchCatalog } = await import('./catalog.service.js');
   const catalogs = {};
   for (const dayLabel of spec.daySplits) {
@@ -211,7 +212,12 @@ export async function generateMonthlyPlan({
     });
   }
 
-  /* -------------------------- Format catalogs for AI ------------------------ */
+  for (const [label, rows] of Object.entries(catalogs)) {
+    if (!rows || rows.length < 3) {
+      console.warn(`⚠️ Catálogo ${label} tiene pocos ejercicios (${rows.length}).`);
+    }
+  }
+
   const compactList = (rows, max = 18) =>
     rows.slice(0, max).map((r, i) =>
       `${i + 1}. ${r.name} — músculo: ${r.primary_muscle} | nivel: ${r.level} | equipo: ${r.equipment} | mecánica: ${r.mechanic ?? 'N/A'} | categoría: ${r.category ?? 'N/A'}`
@@ -221,7 +227,6 @@ export async function generateMonthlyPlan({
     ([label, rows]) => `CATÁLOGO ${label.toUpperCase()}:\n${compactList(rows, 18)}`
   ).join('\n\n');
 
-  /* ------------------------------- AI PROMPT PRO ---------------------------- */
 const planPrompt = `
 ${pinnedFacts}
 
@@ -305,7 +310,6 @@ ${lists}
 
 Los días de cada semana deben ser EXACTAMENTE los siguientes nombres (OBLIGATORIO):  
 ${spec.daySplits.map((d,i)=>`"Día ${i+1} - ${d}"`).join(", ")}
-
 FORMATO OBLIGATORIO (JSON):
 {
   "weeks": [
@@ -316,7 +320,7 @@ FORMATO OBLIGATORIO (JSON):
           "name": "Día 1 - Upper",
           "warmup": "…",
           "exercises": [
-            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8-12", "rest_sec": 90, calories_total: 50 },
+            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8-12", "rest_sec": 90, "calories_total": 50 }
           ],
           "cooldown": "…"
         }
@@ -330,8 +334,18 @@ FORMATO OBLIGATORIO (JSON):
   "global_notes": "técnica, seguridad y progresión"
 }
 `.trim();
+  console.log("---- PLAN PROMPT SIZE ----", planPrompt.length);
 
-  /* ------------------------------- RUN THE AI ------------------------------- */
+  if (planPrompt.length > 15000) {
+    console.warn("PROMPT DEMASIADO GRANDE, será truncado por Replicate");
+  }
+
+  const chunk = planPrompt.slice(planPrompt.length - 8000);
+  console.log("---- LAST 8000 CHARS OF PROMPT ----");
+  console.log(chunk);
+  console.log("--------------");
+
+
   const raw = await runChatReply({ prompt: planPrompt, system_prompt });
 
   let parsedPlan = null;
@@ -344,8 +358,7 @@ FORMATO OBLIGATORIO (JSON):
       parsedPlan = JSON.parse(jsonText);
 
       parsedPlan.frequency = prof.frequency;
-
-
+     
       validateFrequencyMatchesPlan(parsedPlan, prof);
 
       parsedPlan = await enrichPlanWithImages(parsedPlan);

@@ -98,22 +98,46 @@ export function deriveSafetySpec(p) {
   return { reps: goalAdj.reps || ageBase.reps, rest: goalAdj.rest || ageBase.rest, cues: ageBase.cues, contraindications, daySplits };
 }
 
-export function targetsForDay(label) {
-  const map = {
-    'Upper': ['chest','back','shoulders','triceps','biceps'],
-    'Lower': ['quadriceps','hamstrings','glutes','calves'],
-    'Push': ['chest','shoulders','triceps'],
-    'Pull': ['back','biceps','rear delts','lats','row'],
-    'Legs': ['quadriceps','hamstrings','glutes','calves'],
-    'Core': ['core','abdominals','lower back'],
-    'Core/Mob': ['core','abdominals','lower back','mobility','flexibility'],
-    'Mob/Cardio': ['mobility','flexibility','core'],
-    'Full': ['full body','core'],
-    'Full/Movilidad': ['full body','mobility','core'],
-    'Mob/Core': ['mobility','core']
-  };
-  return map[label] || ['full body','core'];
+export function targetsForDay(dayLabel = '') {
+  const d = String(dayLabel).toLowerCase();
+
+  if (d.includes('upper')) {
+    return [
+      'chest',
+      'shoulders',
+      'lats',
+      'back',
+      'middle back',
+      'upper back',
+      'biceps',
+      'triceps',
+      'forearms'
+    ];
+  }
+
+  if (d.includes('lower')) {
+    return [
+      'quadriceps',
+      'hamstrings',
+      'glutes',
+      'calves',
+      'adductors',
+      'abductors'
+    ];
+  }
+
+  if (d.includes('core')) {
+    return [
+      'abdominals',
+      'obliques',
+      'lower back'
+    ];
+  }
+
+  // fallback genérico
+  return [];
 }
+
 
 export function mapUserRowToProfile(row = {}) {
   const profile = {

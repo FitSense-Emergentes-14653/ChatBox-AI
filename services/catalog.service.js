@@ -52,13 +52,24 @@ export async function fetchCatalog({
   const equipments = allowedEquipmentsByProfile(p) || ['body only', 'dumbbell', 'band', 'machine'];
   const primaries = targetsForDay(dayLabel) || [];
 
-  const rows = await findCandidatesByFilters({
+  let rows = await findCandidatesByFilters({
     level: p.level,
     categories,
     equipments,
     primaryLike: primaries,
     limit: limit * 5
   });
+
+  if (!rows || rows.length === 0) {
+    console.warn(`Catálogo vacío para ${dayLabel}. Usando fallback sin primaryLike.`);
+    rows = await findCandidatesByFilters({
+      level: p.level,
+      categories,
+      equipments,
+      primaryLike: [],   
+      limit: limit * 5
+    });
+  }
 
   const safe = (rows || []).filter(r => {
     if (safeHas(excluded, r.name)) return false;
@@ -71,3 +82,4 @@ export async function fetchCatalog({
   const ranked = rankExercisesForProfile(p, dayLabel, categories, safe);
   return ranked.slice(0, limit);
 }
+

@@ -7,7 +7,7 @@ for (const k of required) {
 
 export const cfg = {
   PORT: process.env.PORT ?? '8085',
-  MODEL: process.env.MODEL ?? 'openai/gpt-4o-mini',
+  MODEL: process.env.MODEL ?? 'openai/gpt-5-nano',
   DB: {
     host: process.env.DB_HOST ?? 'localhost',
     user: process.env.DB_USER ?? 'root',
