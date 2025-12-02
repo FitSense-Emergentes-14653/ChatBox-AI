@@ -1,3 +1,5 @@
+import { getDaySplitsFromFrequency } from './slipts.service.js';
+
 export function normalizeProfile(raw = {}) {
   const p = { ...raw };
   p.age = Number.isFinite(+p.age) ? +p.age : null;
@@ -90,33 +92,52 @@ export function deriveSafetySpec(p) {
   if (p.conditions.includes('obesity')) add(/burpee|high impact run/i);
   if (p.conditions.includes('post_surgery')) add(/max effort|olympic lift/i);
 
-  const daySplits = {
-    2:  ['Full', 'Full/Movilidad'],
-    3:  ['Upper', 'Lower', 'Core/Mob'],
-    4:  ['Upper', 'Lower', 'Pull/Core', 'Mob/Core'],
-    5:  ['Push', 'Pull', 'Legs', 'Core', 'Mob/Cardio'],
-    6:  ['Upper', 'Lower', 'Push', 'Pull', 'Legs', 'Core/Mob']
-  }[p.frequency] || ['Upper', 'Lower', 'Core/Mob'];
+  const daySplits = getDaySplitsFromFrequency(p.frequency);
+
 
   return { reps: goalAdj.reps || ageBase.reps, rest: goalAdj.rest || ageBase.rest, cues: ageBase.cues, contraindications, daySplits };
 }
 
-export function targetsForDay(label) {
-  const map = {
-    'Upper': ['chest','back','shoulders','triceps','biceps'],
-    'Lower': ['quadriceps','hamstrings','glutes','calves'],
-    'Push': ['chest','shoulders','triceps'],
-    'Pull': ['back','biceps','rear delts','lats','row'],
-    'Legs': ['quadriceps','hamstrings','glutes','calves'],
-    'Core': ['core','abdominals','lower back'],
-    'Core/Mob': ['core','abdominals','lower back','mobility','flexibility'],
-    'Mob/Cardio': ['mobility','flexibility','core'],
-    'Full': ['full body','core'],
-    'Full/Movilidad': ['full body','mobility','core'],
-    'Mob/Core': ['mobility','core']
-  };
-  return map[label] || ['full body','core'];
+export function targetsForDay(dayLabel = '') {
+  const d = String(dayLabel).toLowerCase();
+
+  if (d.includes('upper')) {
+    return [
+      'chest',
+      'shoulders',
+      'lats',
+      'back',
+      'middle back',
+      'upper back',
+      'biceps',
+      'triceps',
+      'forearms'
+    ];
+  }
+
+  if (d.includes('lower')) {
+    return [
+      'quadriceps',
+      'hamstrings',
+      'glutes',
+      'calves',
+      'adductors',
+      'abductors'
+    ];
+  }
+
+  if (d.includes('core')) {
+    return [
+      'abdominals',
+      'obliques',
+      'lower back'
+    ];
+  }
+
+  // fallback genérico
+  return [];
 }
+
 
 export function mapUserRowToProfile(row = {}) {
   const profile = {

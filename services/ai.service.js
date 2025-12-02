@@ -1,6 +1,6 @@
 import Replicate from 'replicate';
 
-const MODEL = process.env.MODEL || 'openai/gpt-4o-mini';
+const MODEL = process.env.MODEL || 'openai/gpt-5-nano';
 const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
 
 export async function runChatReply({ prompt, system_prompt }) {

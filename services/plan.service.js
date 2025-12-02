@@ -9,12 +9,74 @@ import {
 import { saveRoutine } from '../repos/routines.repo.js';
 
 function extractJsonBlock(text = '') {
-  const m = text.match(/```json\s*([\s\S]*?)```/i);
+  let m = text.match(/```json\s*([\s\S]*?)```/i);
   if (m) return m[1].trim();
-  const t = text.trim();
-  if (t.startsWith('{') && /"weeks"\s*:/.test(t)) return t;
+
+  m = text.match(/\{[\s\S]*\}/);
+  if (m) {
+    const candidate = m[0];
+    try { JSON.parse(candidate); return candidate; } catch {}
+  }
+
+  const idx = text.indexOf('"weeks"');
+  if (idx !== -1) {
+    const start = text.lastIndexOf('{', idx);
+    const end = text.indexOf('}', idx);
+    if (start !== -1 && end !== -1) {
+      const candidate = text.slice(start, end + 1);
+      try { JSON.parse(candidate); return candidate; } catch {}
+    }
+  }
+
   return null;
 }
+
+
+function validateFrequencyMatchesPlan(plan, prof) {
+  const freq = prof.frequency; 
+
+  if (!Array.isArray(plan.weeks) || plan.weeks.length === 0) {
+    throw new Error('El plan no contiene semanas.');
+  }
+
+  plan.weeks.forEach((w, idx) => {
+    w.week = idx + 1;
+  });
+
+  const TARGET_WEEKS = 4;
+  if (plan.weeks.length < TARGET_WEEKS) {
+    const base = plan.weeks.map(w => structuredClone(w));
+    let i = 0;
+    while (plan.weeks.length < TARGET_WEEKS) {
+      const cloned = structuredClone(base[i % base.length]);
+      cloned.week = plan.weeks.length + 1;
+      plan.weeks.push(cloned);
+      i++;
+    }
+  } else if (plan.weeks.length > TARGET_WEEKS) {
+    plan.weeks = plan.weeks.slice(0, TARGET_WEEKS);
+  }
+
+  for (const w of plan.weeks) {
+    if (!Array.isArray(w.days)) {
+      throw new Error(`La semana ${w.week} no tiene días definidos.`);
+    }
+
+    const baseDays = w.days.map(d => structuredClone(d));
+
+    while (w.days.length < freq) {
+      const clone = structuredClone(baseDays[w.days.length % baseDays.length]);
+      clone.name = clone.name.replace(/Día\s+\d+/i, `Día ${w.days.length + 1}`);
+      w.days.push(clone);
+    }
+
+    if (w.days.length > freq) {
+      w.days = w.days.slice(0, freq);
+    }
+  }
+}
+
+
 
 function collectExerciseNames(plan) {
   if (!plan?.weeks?.length) return [];
@@ -50,6 +112,46 @@ async function enrichPlanWithImages(planJson) {
   return planJson;
 }
 
+
+function estimateMET(exName) {
+  const n = exName.toLowerCase();
+
+  if (n.includes('squat') || n.includes('lunge') || n.includes('deadlift'))
+    return 5.5;
+  if (n.includes('bench') || n.includes('press'))
+    return 4.0;
+  if (n.includes('row') || n.includes('pull'))
+    return 4.5;
+  if (n.includes('core') || n.includes('crunch') || n.includes('plank'))
+    return 3.3;
+  if (n.includes('bike') || n.includes('cardio'))
+    return 6.0;
+
+  return 4.0; 
+}
+
+function calcCalories(met, weightKg, minutes = 8) {
+  const hours = minutes / 60;
+  return Math.round(met * (weightKg || 70) * hours);
+}
+
+function addCaloriesToPlan(plan, prof) {
+  const weight = prof.weightKg || 70;
+
+  for (const w of plan.weeks) {
+    for (const d of w.days) {
+      for (const e of d.exercises) {
+        const met = estimateMET(e.name);
+        const calories = calcCalories(met, weight, 8);
+        e.calories_total = calories;
+      }
+    }
+  }
+
+  return plan;
+}
+
+
 function renderPlanMarkdown(plan, { showWeekTitles = true } = {}) {
   if (!plan?.weeks?.length) return 'No pude construir el plan.';
   const lines = [];
@@ -82,7 +184,6 @@ function renderPlanMarkdown(plan, { showWeekTitles = true } = {}) {
   return lines.join('\n');
 }
 
-
 export async function generateMonthlyPlan({
   userId,
   lastPlanDate,
@@ -111,54 +212,139 @@ export async function generateMonthlyPlan({
     });
   }
 
+  for (const [label, rows] of Object.entries(catalogs)) {
+    if (!rows || rows.length < 3) {
+      console.warn(`⚠️ Catálogo ${label} tiene pocos ejercicios (${rows.length}).`);
+    }
+  }
+
   const compactList = (rows, max = 18) =>
     rows.slice(0, max).map((r, i) =>
-      `${i + 1}. ${r.name} — ${r.primary_muscle} | ${r.level} | ${r.equipment}`
+      `${i + 1}. ${r.name} — músculo: ${r.primary_muscle} | nivel: ${r.level} | equipo: ${r.equipment} | mecánica: ${r.mechanic ?? 'N/A'} | categoría: ${r.category ?? 'N/A'}`
     ).join('\n');
 
   const lists = Object.entries(catalogs).map(
     ([label, rows]) => `CATÁLOGO ${label.toUpperCase()}:\n${compactList(rows, 18)}`
   ).join('\n\n');
 
-  const planPrompt = `
+const planPrompt = `
 ${pinnedFacts}
-Contexto reciente:
-${history.map(m => `${m.role.toUpperCase()}: ${m.text}`).join('\n') || '(sin contexto)'}
 
-Perfil normalizado:
-${JSON.stringify(prof, null, 2)}
+Eres FitSense, un entrenador personal profesional. Genera un PLAN MENSUAL COMPLETO basado SOLO en los ejercicios del catálogo (BD real).
 
-Especificación de seguridad/volumen:
-${JSON.stringify({ reps: spec.reps, rest_sec: spec.rest, cues: spec.cues, daySplits: spec.daySplits }, null, 2)}
+OBJETIVO:
+Crear un plan 100% seguro, adaptable y profesional según:
+- edad
+- nivel
+- objetivo
+- equipo disponible
+- entorno
+- condiciones médicas y contraindicaciones
 
-Catálogos (EXCLUSIVAMENTE desde la BASE DE DATOS):
+REGLAS ESTRICTAS:
+1. El plan SIEMPRE debe tener EXACTAMENTE 4 semanas.
+2. Cada semana debe tener EXACTAMENTE ${prof.frequency} días.
+3. Cada semana DEBE tener EXACTAMENTE ${prof.frequency} días.
+4. Usa esta lista de SPLITS según frecuencia (OBLIGATORIO):
+   ${spec.daySplits.map((d,i)=>`Día ${i+1}: ${d}`).join("\n   ")}
+5. SOLO usar ejercicios del CATÁLOGO. NO inventar nombres.
+6. Cada día debe contener:
+   - warmup (5–8 min)
+   - exercises[] (3 ejercicios validos)
+   - cooldown (5 min)
+
+REGLAS DE SELECCIÓN POR PERFIL:
+
+Edad:
+- older75:
+  evitar impacto, plyometrics, cargas pesadas, barras pesadas, cleans, snatches, good mornings.
+- senior60:
+  favorecer máquinas, cables, dumbbell, movilidad y cargas ligeras.
+
+Meta:
+- fatloss: +compuestos, +movimiento, descansos cortos.
+- hypertrophy: 8–12 reps, compuestos + aislamiento.
+- strength: 4–6 reps, ejercicios multiarticulares.
+- beginner: evitar ejercicios complejos o de riesgo.
+
+Entorno:
+- home: solo equipo disponible.
+- home sin equipo: SOLO bodyweight.
+
+Contraindicaciones:
+- Dolor lumbar: evitar deadlifts pesados, hip hinge avanzado, good mornings.
+- Dolor de rodilla: evitar impacto, jumping, deep squats avanzados.
+- Dolor de hombro: evitar overhead pesado, upright rows, dips.
+
+Mapeo muscular obligatorio:
+
+Upper:
+- pecho, espalda, hombros, tríceps, bíceps
+
+Lower:
+- quadriceps, hamstrings, glutes, calves
+
+Core/Mob:
+- abdominals, obliques, estabilidad
+
+Patrones mínimos por día:
+Upper:
+- 1 empuje
+- 1 tracción
+- 1 hombro
+- 1 brazo
+
+Lower:
+- 1 squat
+- 1 hip hinge
+- 1 posterior chain
+- 1 aislado (piernas)
+
+Core:
+- 1 anti-extensión
+- 1 anti-rotación
+- 1 anti-lateral-flexión
+
+CATÁLOGOS (BD real, ejercicios válidos):
 ${lists}
 
-Tarea:
-- Genera un PLAN MENSUAL (4 semanas) con ${prof.frequency} días/semana siguiendo "daySplits".
-- Repetir ejercicios entre semanas es válido.
-- Adapta volumen e intensidad a edad, nivel, objetivo, entorno y condiciones.
-- Semana 4 = deload (~20% menos volumen o -1 serie).
-- Incluye calentamiento (5–8 min) y enfriamiento por día.
-- Elige SOLO nombres de ejercicios que están en los catálogos.
-
-SALIDA:
-Devuelve **SOLO** un bloque \`\`\`json\`\`\` con la forma EXACTA:
-
+Los días de cada semana deben ser EXACTAMENTE los siguientes nombres (OBLIGATORIO):  
+${spec.daySplits.map((d,i)=>`"Día ${i+1} - ${d}"`).join(", ")}
+FORMATO OBLIGATORIO (JSON):
 {
   "weeks": [
-    { "week": 1, "days": [
-      { "name": "Día X - <Label>", "warmup": "…", "exercises": [
-        { "name": "NombreExactoDeLaLista", "sets": 3, "reps": "${spec.reps}", "rest_sec": ${spec.rest}, "notes": "opcional" }
-      ], "cooldown": "…" }
-    ]},
-    { "week": 2, "days": [ ... ]},
-    { "week": 3, "days": [ ... ]},
-    { "week": 4, "days": [ ... ]}
+    {
+      "week": 1,
+      "days": [
+        {
+          "name": "Día 1 - Upper",
+          "warmup": "…",
+          "exercises": [
+            { "name": "NombreExactoDelCatalogo", "sets": 3, "reps": "8-12", "rest_sec": 90, "calories_total": 50 }
+          ],
+          "cooldown": "…"
+        }
+      ]
+    },
+    { "week": 2, "days": [ … ] },
+    { "week": 3, "days": [ … ] },
+    { "week": 4, "days": [ … ] }
   ],
-  "global_notes": "indicaciones de seguridad, técnica y progresión"
+  "frequency": ${prof.frequency},
+  "global_notes": "técnica, seguridad y progresión"
 }
 `.trim();
+  console.log("---- PLAN PROMPT SIZE ----", planPrompt.length);
+
+  if (planPrompt.length > 15000) {
+    console.warn("PROMPT DEMASIADO GRANDE, será truncado por Replicate");
+  }
+
+  const chunk = planPrompt.slice(planPrompt.length - 8000);
+  console.log("---- LAST 8000 CHARS OF PROMPT ----");
+  console.log(chunk);
+  console.log("--------------");
+
 
   const raw = await runChatReply({ prompt: planPrompt, system_prompt });
 
@@ -171,11 +357,13 @@ Devuelve **SOLO** un bloque \`\`\`json\`\`\` con la forma EXACTA:
     if (jsonText) {
       parsedPlan = JSON.parse(jsonText);
 
-      if (prof?.frequency && !parsedPlan.frequency) {
-        parsedPlan.frequency = prof.frequency;
-      }
+      parsedPlan.frequency = prof.frequency;
+     
+      validateFrequencyMatchesPlan(parsedPlan, prof);
 
       parsedPlan = await enrichPlanWithImages(parsedPlan);
+      parsedPlan = addCaloriesToPlan(parsedPlan, prof);
+
 
       await saveRoutine(userId, parsedPlan);
 
