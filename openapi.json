@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8085",
-      "description": "Servidor local"
+      "url": "https://chatbox-ai-production-6ead.up.railway.app",
+      "description": "Servidor de producción"
     }
   ],
   "tags": [
